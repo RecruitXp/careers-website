@@ -1,0 +1,329 @@
+'use strict';
+
+const { test, describe, before, after } = require('node:test');
+const assert = require('node:assert/strict');
+const http = require('node:http');
+
+// server.js reads all config from process.env at module-load (require) time, so the mock backend
+// servers must be listening — and the env vars pointing at them set — before it's required.
+
+const API_KEY = 'test-api-key';
+
+let backendRequests = [];
+let backendServer;
+let backendPort;
+
+// The mock jobs API. Kept separate from the generic backend above so its requests, its status code
+// and its payload can be steered per test.
+let jobsRequests = [];
+let jobsApiStatus = 200;
+let jobsApiServer;
+let jobsApiPort;
+
+const PUBLISHED_JOB = {
+  Id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+  Title: 'Senior Backend Engineer',
+  Description: 'Build things.',
+  Requirements: 'Experience.',
+  Department: 'Engineering',
+  Location: 'Lisbon',
+  EmploymentType: 'full-time',
+  WorkMode: 'hybrid',
+  ExperienceLevel: 'senior',
+  Skills: ['Node.js', 'PostgreSQL'],
+  Benefits: ['Health insurance'],
+  SalaryMin: 45000,
+  SalaryMax: 65000,
+  SalaryCurrency: 'EUR',
+  PublishedAt: '2026-07-01T09:00:00.000Z',
+  ApplicationDeadline: '2026-09-01T00:00:00.000Z',
+  Slug: 'senior-backend-engineer',
+};
+
+// Polls until `predicate()` is true or `timeoutMs` elapses — needed because reportView (and
+// proxyToBackend's upstream call) are fire-and-forget, so nothing awaits their completion.
+async function waitFor(predicate, timeoutMs = 1000) {
+  const start = Date.now();
+  while (!predicate()) {
+    if (Date.now() - start > timeoutMs) throw new Error('waitFor timed out');
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
+
+before(async () => {
+  backendServer = http.createServer((req, res) => {
+    backendRequests.push({ method: req.method, url: req.url, headers: req.headers });
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ echoed: true }));
+  });
+  await new Promise((resolve) => backendServer.listen(0, resolve));
+  backendPort = backendServer.address().port;
+
+  jobsApiServer = http.createServer((req, res) => {
+    jobsRequests.push({ method: req.method, url: req.url, headers: req.headers });
+
+    if (jobsApiStatus !== 200) {
+      res.writeHead(jobsApiStatus, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'unavailable' }));
+      return;
+    }
+
+    // POST /api/published-jobs/by-id/<id>/view — fire-and-forget view count (plan §1.1). Checked
+    // before the GET-by-id match below since both share the `by-id/<id>` prefix.
+    if (req.method === 'POST' && /^\/api\/published-jobs\/by-id\/.+\/view$/.test(req.url)) {
+      res.writeHead(204);
+      res.end();
+      return;
+    }
+
+    // /api/published-jobs/by-id/<id> → one job by id; /api/published-jobs/<slug> → by slug; list otherwise.
+    const byId = req.url.match(/^\/api\/published-jobs\/by-id\/(.+)$/);
+    if (byId) {
+      if (decodeURIComponent(byId[1]) !== PUBLISHED_JOB.Id) {
+        res.writeHead(404, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Published job not found' }));
+        return;
+      }
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(PUBLISHED_JOB));
+      return;
+    }
+
+    const match = req.url.match(/^\/api\/published-jobs\/(.+)$/);
+    if (match) {
+      if (decodeURIComponent(match[1]) !== PUBLISHED_JOB.Slug) {
+        res.writeHead(404, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Published job not found' }));
+        return;
+      }
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(PUBLISHED_JOB));
+      return;
+    }
+
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify([PUBLISHED_JOB]));
+  });
+  await new Promise((resolve) => jobsApiServer.listen(0, resolve));
+  jobsApiPort = jobsApiServer.address().port;
+
+  process.env.NODE_ENV = 'test';
+  process.env.API_KEY = API_KEY;
+  // Configured for one proxy path, left empty for another - covers both sides of /config.js's
+  // `cfg.xUrl ? '/api/proxy/...' : ''` ternary in a single module load.
+  process.env.APPLICANTS_URL = `http://localhost:${backendPort}/applicants`;
+  process.env.CV_PARSE_URL = '';
+  process.env.APPLICATIONS_URL = `http://localhost:${backendPort}/applications`;
+  process.env.JOBS_API_URL = `http://localhost:${jobsApiPort}/api/published-jobs`;
+  process.env.BASE_URL = 'https://careers.example.test';
+  process.env.COMPANY_NAME = 'Example Client Ltd';
+  process.env.COMPANY_WEBSITE = 'https://example.test';
+  process.env.COMPANY_COUNTRY = 'PT';
+});
+
+after(async () => {
+  await new Promise((resolve) => backendServer.close(resolve));
+  await new Promise((resolve) => jobsApiServer.close(resolve));
+});
+
+describe('proxyToBackend (via the real Express app) and /config.js', () => {
+  let appServer;
+  let appPort;
+
+  before(async () => {
+    const { app } = require('./server.js');
+    appServer = app.listen(0);
+    await new Promise((resolve) => appServer.once('listening', resolve));
+    appPort = appServer.address().port;
+  });
+
+  after(async () => {
+    await new Promise((resolve) => appServer.close(resolve));
+  });
+
+  test('attaches the API key, forwarding to the configured applicants proxy target', async () => {
+    backendRequests = [];
+
+    const res = await fetch(`http://localhost:${appPort}/api/proxy/applicants`, { method: 'POST' });
+    const body = await res.json();
+
+    assert.equal(res.status, 200);
+    assert.deepEqual(body, { echoed: true });
+    assert.equal(backendRequests.length, 1);
+    assert.equal(backendRequests[0].headers['x-api-key'], API_KEY);
+    // Never the old M2M shape — this site holds no bearer token or tenant header any more.
+    assert.equal(backendRequests[0].headers.authorization, undefined);
+    assert.equal(backendRequests[0].headers['x-tenant-id'], undefined);
+  });
+
+  test('/config.js exposes a proxy path only for the URLs that are actually configured', async () => {
+    const res = await fetch(`http://localhost:${appPort}/config.js`);
+    const body = await res.text();
+
+    assert.match(body, /"applicantsUrl":\s*"\/api\/proxy\/applicants"/);
+    assert.match(body, /"applicationsUrl":\s*"\/api\/proxy\/applications"/);
+    assert.match(body, /"cvParseUrl":\s*""/);
+  });
+
+  test('/config.js hands the browser no job-data URL at all', async () => {
+    const res = await fetch(`http://localhost:${appPort}/config.js`);
+    const body = await res.text();
+
+    // The browser used to be given the feed URL here and fetch job data itself. It can't any
+    // more — the jobs API requires a key this server must not disclose — so any URL reappearing
+    // in this payload is a regression, not a feature.
+    assert.equal(body.includes('feed'), false);
+    assert.equal(body.includes(`localhost:${jobsApiPort}`), false);
+  });
+});
+
+// Publication is this site's job now, not job-service's: the URLs, the company identity and the
+// structured data all originate here (docs/implementation-plans/jobs-api-careers-site-publishing-plan.md).
+describe('published jobs, sitemap, view counting and server-rendered structured data', () => {
+  let appServer;
+  let appPort;
+
+  before(async () => {
+    const { app } = require('./server.js');
+    appServer = app.listen(0);
+    await new Promise((resolve) => appServer.once('listening', resolve));
+    appPort = appServer.address().port;
+  });
+
+  after(async () => {
+    jobsApiStatus = 200;
+    await new Promise((resolve) => appServer.close(resolve));
+  });
+
+  test('/sitemap.xml fails loudly when job data is unavailable and nothing is cached', async () => {
+    jobsApiStatus = 503;
+
+    const res = await fetch(`http://localhost:${appPort}/sitemap.xml`);
+    const body = await res.text();
+
+    // Not a 200 listing only "/": to a crawler that is indistinguishable from "every job was
+    // unpublished", and it would drop the whole site from the index over a transient outage.
+    assert.equal(res.status, 503);
+    assert.equal(body.includes('<urlset'), false);
+  });
+
+  test('/sitemap.xml reads the jobs API with the API key attached', async () => {
+    jobsApiStatus = 200;
+    jobsRequests = [];
+
+    const res = await fetch(`http://localhost:${appPort}/sitemap.xml`);
+    const body = await res.text();
+
+    assert.equal(res.status, 200);
+    assert.equal(jobsRequests.length, 1);
+    assert.equal(jobsRequests[0].url, '/api/published-jobs');
+    assert.equal(jobsRequests[0].headers['x-api-key'], API_KEY);
+    assert.equal(jobsRequests[0].headers.authorization, undefined);
+    assert.match(body, /<loc>https:\/\/careers\.example\.test\/jobs\/senior-backend-engineer<\/loc>/);
+  });
+
+  test('/jobs/:slug serves the JobPosting JSON-LD in the response body', async () => {
+    const res = await fetch(`http://localhost:${appPort}/jobs/senior-backend-engineer`);
+    const html = await res.text();
+
+    assert.equal(res.status, 200);
+
+    // In the served HTML, not injected by client-side JS after load — that is the point of moving
+    // the fetch server-side, and it's what a crawler that doesn't run scripts sees.
+    const ld = JSON.parse(
+      html.match(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/)[1].replace(/\\u003c/g, '<'),
+    );
+
+    assert.equal(ld['@type'], 'JobPosting');
+    assert.equal(ld.title, 'Senior Backend Engineer');
+    // The two facts job-feed-api could never get right for a tenant that isn't us.
+    assert.equal(ld.url, 'https://careers.example.test/jobs/senior-backend-engineer');
+    assert.equal(ld.hiringOrganization.name, 'Example Client Ltd');
+    assert.equal(ld.hiringOrganization.sameAs, 'https://example.test');
+    // Never the platform's own identity, whatever the job data says.
+    assert.equal(html.includes('RecruitXp'), false);
+
+    assert.equal(ld.datePosted, '2026-07-01');
+    assert.equal(ld.validThrough, '2026-09-01');
+    assert.equal(ld.employmentType, 'FULL_TIME');
+    assert.equal(ld.jobLocation.address.addressLocality, 'Lisbon');
+    assert.equal(ld.jobLocation.address.addressCountry, 'PT');
+    assert.equal(ld.baseSalary.value.minValue, 45000);
+    assert.equal(ld.identifier.value, PUBLISHED_JOB.Id);
+  });
+
+  test('/jobs/:slug reports a view, fire-and-forget, with the API key attached', async () => {
+    jobsRequests = [];
+
+    const res = await fetch(`http://localhost:${appPort}/jobs/senior-backend-engineer`);
+    await res.text();
+
+    await waitFor(() => jobsRequests.some((r) => r.method === 'POST'));
+
+    const viewReq = jobsRequests.find((r) => r.method === 'POST');
+    assert.equal(viewReq.url, `/api/published-jobs/by-id/${PUBLISHED_JOB.Id}/view`);
+    assert.equal(viewReq.headers['x-api-key'], API_KEY);
+  });
+
+  test('/jobs/:slug\'s canonical link matches the URL the sitemap advertises', async () => {
+    const [pageRes, sitemapRes] = await Promise.all([
+      fetch(`http://localhost:${appPort}/jobs/senior-backend-engineer`),
+      fetch(`http://localhost:${appPort}/sitemap.xml`),
+    ]);
+    const [html, xml] = await Promise.all([pageRes.text(), sitemapRes.text()]);
+
+    const canonical = html.match(/<link rel="canonical" href="([^"]+)">/)[1];
+
+    assert.equal(canonical, 'https://careers.example.test/jobs/senior-backend-engineer');
+    assert.equal(xml.includes(`<loc>${canonical}</loc>`), true);
+  });
+
+  test('/jobs/:id resolves by id and canonicalises to the slug URL', async () => {
+    // The platform job page redirects here with an id-based careers template. A guid must resolve
+    // (via by-id) and the canonical must still be the slug form, so id- and slug-reached pages agree.
+    const res = await fetch(`http://localhost:${appPort}/jobs/${PUBLISHED_JOB.Id}`);
+    const html = await res.text();
+
+    assert.equal(res.status, 200);
+    const canonical = html.match(/<link rel="canonical" href="([^"]+)">/)[1];
+    assert.equal(canonical, 'https://careers.example.test/jobs/senior-backend-engineer');
+  });
+
+  test('/jobs/:slug embeds the job payload so the page needs no client-side fetch', async () => {
+    const res = await fetch(`http://localhost:${appPort}/jobs/senior-backend-engineer`);
+    const html = await res.text();
+
+    assert.match(html, /window\.__JOB__ = \{/);
+    assert.match(html, /"Slug":"senior-backend-engineer"/);
+  });
+
+  test('an unknown slug 404s instead of serving a blank indexable page', async () => {
+    const res = await fetch(`http://localhost:${appPort}/jobs/no-such-job`);
+    const html = await res.text();
+
+    assert.equal(res.status, 404);
+    assert.match(html, /window\.__JOB__ = null;/);
+    // No structured data on a page that describes no job.
+    assert.equal(html.includes('application/ld+json'), false);
+  });
+
+  test('the listing page embeds the published job list', async () => {
+    const res = await fetch(`http://localhost:${appPort}/`);
+    const html = await res.text();
+
+    assert.equal(res.status, 200);
+    assert.match(html, /window\.__JOBS__ = \[/);
+    assert.match(html, /"Title":"Senior Backend Engineer"/);
+  });
+
+  test('serves the cached job list when the jobs API goes away mid-life', async () => {
+    jobsApiStatus = 503;
+
+    const res = await fetch(`http://localhost:${appPort}/sitemap.xml`);
+    const body = await res.text();
+
+    // A brief job-service outage must not blank the sitemap Google is about to re-crawl.
+    assert.equal(res.status, 200);
+    assert.match(body, /senior-backend-engineer/);
+  });
+});

@@ -1,0 +1,144 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   CSS custom properties — set dynamically from config.js on page load.
+   Change CONFIG.colors in config.js; these are just the initial defaults.
+───────────────────────────────────────────────────────────────────────────── */
+:root {
+  --color-primary:        #6366f1;
+  --color-primary-dark:   #4f46e5;
+  --color-secondary:      #06b6d4;
+  --color-secondary-dark: #0891b2;
+}
+
+/* ── Base ──────────────────────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; }
+
+body {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+}
+
+/* ── Themed utilities ─────────────────────────────────────────────────────── */
+.accent-text  { color: var(--color-primary); }
+
+.btn-primary {
+  background-color: var(--color-primary);
+  color: #fff;
+  cursor: pointer;
+  transition: background-color 0.15s ease, opacity 0.15s;
+}
+.btn-primary:hover:not(:disabled) { background-color: var(--color-primary-dark); }
+.btn-primary:disabled { opacity: 0.55; cursor: not-allowed; }
+
+/* Filter buttons */
+.filter-btn {
+  color: #6b7280;
+  cursor: pointer;
+  transition: background-color 0.15s, color 0.15s, border-color 0.15s;
+}
+.filter-btn:hover {
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+}
+.filter-btn.active {
+  background-color: var(--color-primary);
+  color: #fff;
+  border-color: var(--color-primary);
+}
+
+/* Skill tags */
+.tag-skill {
+  background-color: #ede9fe; /* fallback */
+  background-color: color-mix(in srgb, var(--color-primary) 10%, #fff);
+  color: var(--color-primary);
+}
+
+/* ── Hero gradient ─────────────────────────────────────────────────────────── */
+.hero-bg {
+  background: linear-gradient(135deg, var(--color-primary) 0%, var(--color-secondary) 100%);
+}
+
+/* ── Form inputs ───────────────────────────────────────────────────────────── */
+.form-input {
+  background-color: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 0.5rem;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.form-input:focus {
+  outline: none;
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-primary) 18%, transparent);
+}
+
+#search-input {
+  border: 1px solid #e5e7eb;
+  border-radius: 0.5rem;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+#search-input:focus {
+  outline: none;
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-primary) 18%, transparent);
+}
+
+/* ── Drawer ────────────────────────────────────────────────────────────────── */
+.job-drawer {
+  transform: translateX(100%);
+  transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.job-drawer.open { transform: translateX(0); }
+
+/* ── Modal backdrop + content ─────────────────────────────────────────────── */
+.overlay {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.2s ease;
+}
+.overlay.open {
+  opacity: 1;
+  pointer-events: all;
+}
+.modal-card {
+  transform: scale(0.96) translateY(12px);
+  transition: transform 0.22s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.overlay.open .modal-card {
+  transform: scale(1) translateY(0);
+}
+
+/* ── Skeleton loading ──────────────────────────────────────────────────────── */
+.skeleton {
+  display: block;
+  background: linear-gradient(90deg, #f3f4f6 25%, #e9eaec 50%, #f3f4f6 75%);
+  background-size: 400% 100%;
+  border-radius: 0.375rem;
+  animation: shimmer 1.4s ease-in-out infinite;
+}
+@keyframes shimmer {
+  0%   { background-position: 100% 50%; }
+  100% { background-position: -100% 50%; }
+}
+
+/* ── Job description prose ─────────────────────────────────────────────────── */
+.job-description h1 { font-size: 1.5rem;   font-weight: 700; margin: 1.75rem 0 0.5rem; color: #111827; }
+.job-description h2 { font-size: 1.2rem;   font-weight: 700; margin: 1.75rem 0 0.4rem; color: #111827; }
+.job-description h3 { font-size: 1.05rem;  font-weight: 600; margin: 1.4rem  0 0.35rem; color: #1f2937; }
+.job-description p  { margin: 0.55rem 0; line-height: 1.75; color: #374151; }
+.job-description ul { margin: 0.55rem 0; padding-left: 1.4rem; list-style: disc; color: #374151; }
+.job-description ol { margin: 0.55rem 0; padding-left: 1.4rem; list-style: decimal; color: #374151; }
+.job-description li { margin: 0.25rem 0; line-height: 1.65; }
+.job-description strong { font-weight: 600; color: #111827; }
+.job-description em     { font-style: italic; }
+.job-description code {
+  background: #f3f4f6;
+  border-radius: 0.25rem;
+  padding: 0.1em 0.35em;
+  font-size: 0.875em;
+  font-family: ui-monospace, monospace;
+}
+.job-description a { color: var(--color-primary); text-decoration: underline; }
+.job-description h2:first-child,
+.job-description h3:first-child { margin-top: 0; }

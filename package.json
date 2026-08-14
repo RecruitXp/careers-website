@@ -1,0 +1,16 @@
+{
+  "name": "careers-website",
+  "private": true,
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test *.test.js",
+    "dev:css": "tailwindcss --content './public/index.html,./public/job.html,./public/js/**/*.js' --input ./public/css/styles.css --output ./public/css/tailwind.css --watch",
+    "build:css": "tailwindcss --content './public/index.html,./public/job.html,./public/js/**/*.js' --input ./public/css/styles.css --output ./public/css/tailwind.css --minify"
+  },
+  "dependencies": {
+    "express": "^4"
+  },
+  "devDependencies": {
+    "tailwindcss": "^3"
+  }
+}
