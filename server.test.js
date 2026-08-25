@@ -35,6 +35,7 @@ const PUBLISHED_JOB = {
   SalaryMin: 45000,
   SalaryMax: 65000,
   SalaryCurrency: 'EUR',
+  Language: 'pt-PT',
   PublishedAt: '2026-07-01T09:00:00.000Z',
   ApplicationDeadline: '2026-09-01T00:00:00.000Z',
   Slug: 'senior-backend-engineer',
@@ -193,6 +194,38 @@ describe('published jobs, sitemap, view counting and server-rendered structured 
   after(async () => {
     jobsApiStatus = 200;
     await new Promise((resolve) => appServer.close(resolve));
+  });
+
+  test('the job page declares the posting language, in the markup and to crawlers', async () => {
+    jobsApiStatus = 200;
+
+    const res = await fetch(`http://localhost:${appPort}/jobs/senior-backend-engineer`);
+    const html = await res.text();
+
+    assert.equal(res.status, 200);
+    assert.match(html, /<html lang="pt-PT"/);
+
+    const ld = JSON.parse(
+      html.match(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/)[1].replace(/\u003c/g, '<'));
+    assert.equal(ld.inLanguage, 'pt-PT');
+  });
+
+  test('inLanguage is omitted rather than guessed when a job carries no language', () => {
+    const { buildJobPostingLd } = require('./server.js');
+
+    const ld = buildJobPostingLd({ ...PUBLISHED_JOB, Language: undefined });
+
+    assert.equal('inLanguage' in ld, false);
+  });
+
+  test('the listing declares the language most of the board is written in', () => {
+    const { dominantLanguage } = require('./server.js');
+
+    assert.equal(dominantLanguage([{ Language: 'pt-PT' }, { Language: 'pt-PT' }, { Language: 'en-US' }]), 'pt-PT');
+    assert.equal(dominantLanguage([{ Language: 'en-US' }]), 'en-US');
+    // Nothing to go on: the template's own lang stands rather than a guess.
+    assert.equal(dominantLanguage([]), null);
+    assert.equal(dominantLanguage([{ Title: 'no language' }]), null);
   });
 
   test('/sitemap.xml fails loudly when job data is unavailable and nothing is cached', async () => {

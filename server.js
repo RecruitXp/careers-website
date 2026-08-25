@@ -231,6 +231,12 @@ function buildJobPostingLd(job) {
     };
   }
 
+  // The language the posting is written in, straight from the ATS (jobs."Language" is NOT NULL
+  // there, so a published job always carries one). Omitted rather than guessed if it is ever
+  // absent: every other field here is a fact the employer supplied, and a language guessed on
+  // their behalf is a claim to Google nobody made.
+  if (job.Language) ld.inLanguage = job.Language;
+
   if (job.ExperienceLevel) ld.experienceRequirements = job.ExperienceLevel;
   if (job.Skills   && job.Skills.length)   ld.skills      = job.Skills.join(', ');
   if (job.Benefits && job.Benefits.length) ld.jobBenefits = job.Benefits.join(', ');
@@ -246,6 +252,13 @@ function buildJobPostingLd(job) {
   return ld;
 }
 
+// The language tag is the only thing interpolated into an attribute here, and it comes from the
+// ATS rather than from the request - escaped anyway, because "it can't contain a quote today" is
+// exactly the assumption that ages badly.
+function escapeAttr(value) {
+  return String(value).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
+}
+
 // JSON destined for a <script> element, not for an HTTP body: a `</script>` or `<!--` inside any
 // job field would otherwise end the element early and turn job text into markup.
 function jsonForScript(value) {
@@ -256,8 +269,14 @@ const HEAD_PLACEHOLDER = '<!--SERVER_HEAD-->';
 
 // job.html / index.html are read per request rather than cached at startup so a container rebuild
 // isn't needed to pick up a template edit in dev; they're small and this is not a hot path.
-function renderPage(file, headHtml) {
-  const html = fs.readFileSync(path.join(__dirname, 'public', file), 'utf8');
+// The templates ship lang="en" so they are valid standalone files; every served response rewrites
+// it. `lang` has no "omit it" option the way inLanguage does - screen readers and hyphenation need
+// something - so this one falls back to the template's own value rather than staying silent.
+const HTML_LANG_RE = /<html lang="[^"]*"/;
+
+function renderPage(file, headHtml, lang) {
+  let html = fs.readFileSync(path.join(__dirname, 'public', file), 'utf8');
+  if (lang) html = html.replace(HTML_LANG_RE, `<html lang="${escapeAttr(lang)}"`);
   if (!html.includes(HEAD_PLACEHOLDER)) {
     console.warn(`[render] ${file} has no ${HEAD_PLACEHOLDER} — server-rendered head content dropped`);
     return html;
@@ -353,6 +372,23 @@ ${urls}
   res.send(xml);
 });
 
+// The listing has no single posting to follow, so it takes the language most of the board is
+// written in - right for the common case (a board in one language) and a reasonable hint for a
+// mixed one, where each job page still declares its own exact language. Empty board -> null, and
+// the template's own lang stands.
+function dominantLanguage(jobs) {
+  const counts = new Map();
+  for (const job of jobs) {
+    if (!job.Language) continue;
+    counts.set(job.Language, (counts.get(job.Language) || 0) + 1);
+  }
+  let best = null;
+  for (const [language, n] of counts) {
+    if (!best || n > best[1]) best = [language, n];
+  }
+  return best && best[0];
+}
+
 // ── Listing page — job data rendered into the HTML, not fetched by the browser ── //
 async function serveListing(_req, res) {
   let jobs = [];
@@ -368,7 +404,7 @@ async function serveListing(_req, res) {
   const head = `<script>window.__JOBS__ = ${jsonForScript(jobs)};</script>`;
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
   res.setHeader('Cache-Control', 'no-cache');
-  res.send(renderPage('index.html', head));
+  res.send(renderPage('index.html', head, dominantLanguage(jobs)));
 }
 
 app.get('/', serveListing);
@@ -388,6 +424,7 @@ app.get('/jobs/:idOrSlug', async (req, res) => {
   if (!job) {
     res.status(404);
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    // No job, so no language to declare - the template's own lang stands.
     return res.send(renderPage('job.html', '<script>window.__JOB__ = null;</script>'));
   }
 
@@ -409,7 +446,7 @@ app.get('/jobs/:idOrSlug', async (req, res) => {
 
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
   res.setHeader('Cache-Control', 'no-cache');
-  res.send(renderPage('job.html', parts.join('\n  ')));
+  res.send(renderPage('job.html', parts.join('\n  '), job.Language));
 });
 
 // ── Static files ──────────────────────────────────────────────────────────── //
@@ -433,7 +470,7 @@ if (process.env.NODE_ENV !== 'test') {
   });
 }
 
-module.exports = { app, proxyToBackend, buildJobPostingLd, reportView };
+module.exports = { app, proxyToBackend, buildJobPostingLd, dominantLanguage, reportView };
 
 // ── Helpers ───────────────────────────────────────────────────────────────── //
 // Resolves { status, json } for 2xx and 404 — a 404 from the jobs API means "not published", which
