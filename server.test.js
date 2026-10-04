@@ -119,6 +119,7 @@ before(async () => {
   process.env.BASE_URL = 'https://careers.example.test';
   process.env.COMPANY_NAME = 'Example Client Ltd';
   process.env.COMPANY_WEBSITE = 'https://example.test';
+  process.env.COMPANY_EMAIL = 'jobs@example.test';
   process.env.COMPANY_COUNTRY = 'PT';
 });
 
@@ -347,6 +348,39 @@ describe('published jobs, sitemap, view counting and server-rendered structured 
     assert.equal(res.status, 200);
     assert.match(html, /window\.__JOBS__ = \[/);
     assert.match(html, /"Title":"Senior Backend Engineer"/);
+  });
+
+  test('the listing renders the company branding into the HTML, not via client-side JS', async () => {
+    const res = await fetch(`http://localhost:${appPort}/`);
+    const html = await res.text();
+
+    // What a crawler that runs no scripts sees: previously an empty <h1> and href="#" links.
+    assert.match(html, /<title>Careers — Example Client Ltd<\/title>/);
+    assert.match(html, /<h1 id="hero-title"[^>]*>Work with us at Example Client Ltd<\/h1>/);
+    assert.match(html, /id="company-site" href="https:\/\/example\.test"/);
+    assert.match(html, /href="mailto:jobs@example\.test"[^>]*>jobs@example\.test</);
+    assert.match(html, /<meta name="description" content="Open positions and career opportunities at Example Client Ltd\.">/);
+    assert.equal(html.includes('{{'), false);
+  });
+
+  test('the job page renders the same branding', async () => {
+    const res = await fetch(`http://localhost:${appPort}/jobs/senior-backend-engineer`);
+    const html = await res.text();
+
+    assert.match(html, /id="company-site" href="https:\/\/example\.test"/);
+    assert.match(html, /href="mailto:jobs@example\.test"[^>]*>jobs@example\.test</);
+    assert.equal(html.includes('{{'), false);
+  });
+
+  test('branding values are escaped before they reach the markup', () => {
+    const { applyBranding } = require('./server.js');
+
+    assert.equal(
+      applyBranding('<h1>{{COMPANY_NAME}}</h1><a href="{{COMPANY_WEBSITE}}">', { COMPANY_NAME: 'A & B <Co>', COMPANY_WEBSITE: '"' }),
+      '<h1>A &amp; B &lt;Co></h1><a href="&quot;">',
+    );
+    // A token with no value renders empty rather than leaking the placeholder.
+    assert.equal(applyBranding('{{COMPANY_EMAIL}}', {}), '');
   });
 
   test('serves the cached job list when the jobs API goes away mid-life', async () => {

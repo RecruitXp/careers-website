@@ -9,23 +9,15 @@
   R.setProperty('--color-secondary',      CONFIG.colors.secondary);
   R.setProperty('--color-secondary-dark', CONFIG.colors.secondaryDark);
 
-  // ── 2. Populate company info ───────────────────────────────────────────── //
+  // ── 2. Logo ────────────────────────────────────────────────────────────── //
+  // Website and e-mail links and the footer are rendered into the HTML by server.js so crawlers
+  // see them; only the logo is built here.
   const logoEl = document.getElementById('company-logo');
   if (CONFIG.company.logo) {
     logoEl.innerHTML = '<img src="' + CONFIG.company.logo + '" alt="' + (CONFIG.company.logoAlt || CONFIG.company.name) + '" class="h-8 w-auto">';
   } else {
     logoEl.innerHTML = '<span class="text-xl font-bold accent-text">' + CONFIG.company.name + '</span>';
   }
-
-  const siteLink = document.getElementById('company-site');
-  siteLink.href = CONFIG.company.website || '#';
-
-  document.getElementById('footer-name').textContent = CONFIG.company.name;
-  document.getElementById('footer-year').textContent = String(new Date().getFullYear());
-
-  const emailEl = document.getElementById('footer-email');
-  emailEl.href        = 'mailto:' + CONFIG.company.email;
-  emailEl.textContent = CONFIG.company.email;
 
   function setText(id, text) {
     const el = document.getElementById(id);

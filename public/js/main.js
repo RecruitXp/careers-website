@@ -9,29 +9,15 @@
   R.setProperty('--color-secondary',      CONFIG.colors.secondary);
   R.setProperty('--color-secondary-dark', CONFIG.colors.secondaryDark);
 
-  // ── 2. Populate company info ───────────────────────────────────────────── //
-  document.title = 'Careers — ' + CONFIG.company.name;
-
-  // Logo
+  // ── 2. Logo ────────────────────────────────────────────────────────────── //
+  // The rest of the company branding (title, hero copy, website and e-mail links, footer) is
+  // rendered into the HTML by server.js so crawlers see it; only the logo is built here.
   const logoEl = document.getElementById('company-logo');
   if (CONFIG.company.logo) {
     logoEl.innerHTML = '<img src="' + CONFIG.company.logo + '" alt="' + (CONFIG.company.logoAlt || CONFIG.company.name) + '" class="h-8 w-auto">';
   } else {
     logoEl.innerHTML = '<span class="text-xl font-bold accent-text">' + CONFIG.company.name + '</span>';
   }
-
-  const siteLink = document.getElementById('company-site');
-  siteLink.href        = CONFIG.company.website || '#';
-
-  setText('hero-title',       'Work with us at ' + CONFIG.company.name);
-  setText('hero-tagline',     CONFIG.company.tagline    || '');
-  setText('hero-description', CONFIG.company.description || '');
-  setText('footer-name',      CONFIG.company.name);
-  setText('footer-year',      String(new Date().getFullYear()));
-
-  const emailEl = document.getElementById('footer-email');
-  emailEl.href        = 'mailto:' + CONFIG.company.email;
-  emailEl.textContent = CONFIG.company.email;
 
   function setText(id, text) {
     const el = document.getElementById(id);

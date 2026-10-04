@@ -267,6 +267,28 @@ function jsonForScript(value) {
 
 const HEAD_PLACEHOLDER = '<!--SERVER_HEAD-->';
 
+// Branding placeholders in index.html / job.html, filled from the same env vars /config.js hands
+// the browser. Rendered here so the company name, its website link and the contact e-mail are in
+// the served HTML: a crawler that runs no scripts used to see an empty <h1> and href="#" links.
+const BRANDING_TOKEN_RE = /\{\{(COMPANY_NAME|COMPANY_WEBSITE|COMPANY_EMAIL|COMPANY_TAGLINE|COMPANY_DESCRIPTION|META_DESCRIPTION|YEAR)\}\}/g;
+
+function brandingValues() {
+  return {
+    COMPANY_NAME:        cfg.companyName,
+    // '#' rather than '' when unset: an empty href is a link to the page itself.
+    COMPANY_WEBSITE:     cfg.companyWebsite || '#',
+    COMPANY_EMAIL:       cfg.companyEmail,
+    COMPANY_TAGLINE:     cfg.companyTagline,
+    COMPANY_DESCRIPTION: cfg.companyDesc,
+    META_DESCRIPTION:    cfg.companyDesc || `Open positions and career opportunities at ${cfg.companyName}.`,
+    YEAR:                String(new Date().getFullYear()),
+  };
+}
+
+function applyBranding(html, values) {
+  return html.replace(BRANDING_TOKEN_RE, (_match, key) => escapeAttr(values[key] ?? ''));
+}
+
 // job.html / index.html are read per request rather than cached at startup so a container rebuild
 // isn't needed to pick up a template edit in dev; they're small and this is not a hot path.
 // The templates ship lang="en" so they are valid standalone files; every served response rewrites
@@ -277,6 +299,7 @@ const HTML_LANG_RE = /<html lang="[^"]*"/;
 function renderPage(file, headHtml, lang) {
   let html = fs.readFileSync(path.join(__dirname, 'public', file), 'utf8');
   if (lang) html = html.replace(HTML_LANG_RE, `<html lang="${escapeAttr(lang)}"`);
+  html = applyBranding(html, brandingValues());
   if (!html.includes(HEAD_PLACEHOLDER)) {
     console.warn(`[render] ${file} has no ${HEAD_PLACEHOLDER} — server-rendered head content dropped`);
     return html;
@@ -470,7 +493,7 @@ if (process.env.NODE_ENV !== 'test') {
   });
 }
 
-module.exports = { app, proxyToBackend, buildJobPostingLd, dominantLanguage, reportView };
+module.exports = { app, proxyToBackend, buildJobPostingLd, dominantLanguage, reportView, applyBranding };
 
 // ── Helpers ───────────────────────────────────────────────────────────────── //
 // Resolves { status, json } for 2xx and 404 — a 404 from the jobs API means "not published", which

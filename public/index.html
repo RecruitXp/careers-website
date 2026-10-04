@@ -3,8 +3,11 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="Open positions and career opportunities.">
-  <title>Careers</title>
+  <meta name="description" content="{{META_DESCRIPTION}}">
+  <title>Careers — {{COMPANY_NAME}}</title>
+  <!-- Branding: the COMPANY_* placeholders in double braces are filled by server.js's renderPage from the same
+       environment variables /config.js hands the browser, so the company name, website link and
+       e-mail are in the served HTML for crawlers that run no scripts. -->
 
   <!-- Tailwind CSS (built at container image build time) -->
   <link rel="stylesheet" href="/css/tailwind.css">
@@ -33,7 +36,7 @@
     <div class="max-w-6xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between gap-4">
       <div id="company-logo" class="flex items-center shrink-0"></div>
 
-      <a id="company-site" href="#" target="_blank" rel="noopener"
+      <a id="company-site" href="{{COMPANY_WEBSITE}}" target="_blank" rel="noopener"
          class="text-sm text-gray-500 hover:text-gray-800 transition-colors flex items-center gap-1.5">
         Company website
         <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -50,9 +53,9 @@
   <section class="hero-bg text-white py-20 px-4 text-center">
     <div class="max-w-3xl mx-auto">
       <p class="text-sm font-semibold uppercase tracking-widest opacity-75 mb-4">We're hiring</p>
-      <h1 id="hero-title" class="text-4xl sm:text-5xl font-bold leading-tight mb-4"></h1>
-      <p id="hero-tagline" class="text-xl opacity-90 max-w-2xl mx-auto mb-3 font-medium"></p>
-      <p id="hero-description" class="text-base opacity-75 max-w-xl mx-auto mb-10"></p>
+      <h1 id="hero-title" class="text-4xl sm:text-5xl font-bold leading-tight mb-4">Work with us at {{COMPANY_NAME}}</h1>
+      <p id="hero-tagline" class="text-xl opacity-90 max-w-2xl mx-auto mb-3 font-medium">{{COMPANY_TAGLINE}}</p>
+      <p id="hero-description" class="text-base opacity-75 max-w-xl mx-auto mb-10">{{COMPANY_DESCRIPTION}}</p>
 
       <div class="flex justify-center">
         <div class="bg-white/15 backdrop-blur-sm rounded-2xl px-8 py-5 text-center">
@@ -117,8 +120,8 @@
   ════════════════════════════════════════════════════════════════════════════ -->
   <footer class="bg-white border-t border-gray-100 py-10 px-4">
     <div class="max-w-6xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-3 text-sm text-gray-400">
-      <span>© <span id="footer-year"></span> <span id="footer-name"></span>. All rights reserved.</span>
-      <span>Questions? <a id="footer-email" href="#" class="accent-text hover:underline">Email us</a></span>
+      <span>© {{YEAR}} {{COMPANY_NAME}}. All rights reserved.</span>
+      <span>Questions? <a id="footer-email" href="mailto:{{COMPANY_EMAIL}}" class="accent-text hover:underline">{{COMPANY_EMAIL}}</a></span>
     </div>
   </footer>
 

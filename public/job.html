@@ -3,8 +3,11 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="">
-  <title>Careers</title>
+  <meta name="description" content="{{META_DESCRIPTION}}">
+  <title>Careers — {{COMPANY_NAME}}</title>
+  <!-- Branding: the COMPANY_* placeholders in double braces are filled by server.js's renderPage from the same
+       environment variables /config.js hands the browser, so the company name, website link and
+       e-mail are in the served HTML for crawlers that run no scripts. -->
 
   <!-- Tailwind CSS (built at container image build time) -->
   <link rel="stylesheet" href="/css/tailwind.css">
@@ -35,7 +38,7 @@
       <a href="/" class="flex items-center shrink-0">
         <div id="company-logo"></div>
       </a>
-      <a id="company-site" href="#" target="_blank" rel="noopener"
+      <a id="company-site" href="{{COMPANY_WEBSITE}}" target="_blank" rel="noopener"
          class="text-sm text-gray-500 hover:text-gray-800 transition-colors flex items-center gap-1.5">
         Company website
         <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -142,8 +145,8 @@
   ════════════════════════════════════════════════════════════════════════════ -->
   <footer class="bg-white border-t border-gray-100 py-10 px-4 mt-8">
     <div class="max-w-6xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-3 text-sm text-gray-400">
-      <span>© <span id="footer-year"></span> <span id="footer-name"></span>. All rights reserved.</span>
-      <span>Questions? <a id="footer-email" href="#" class="accent-text hover:underline">Email us</a></span>
+      <span>© {{YEAR}} {{COMPANY_NAME}}. All rights reserved.</span>
+      <span>Questions? <a id="footer-email" href="mailto:{{COMPANY_EMAIL}}" class="accent-text hover:underline">{{COMPANY_EMAIL}}</a></span>
     </div>
   </footer>
 

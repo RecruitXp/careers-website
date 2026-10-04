@@ -94,6 +94,11 @@ and `job.html` for markup, `public/js/main.js` and `public/js/job.js` for behavi
 `public/css/styles.css` for your own design tokens (colours, fonts, spacing). Rebuild the CSS and
 your Docker image, and redeploy.
 
+The branding text in both pages (company name, website and e-mail links, tagline, description,
+footer year) is written as `{{COMPANY_NAME}}`-style placeholders that `server.js` fills from the
+same environment variables as `/config.js`. Keep that pattern when adding branding to the markup:
+it is what puts the text in the served HTML, where search engines read it without running scripts.
+
 ```bash
 npm ci
 npm run build:css       # one-off build, or npm run dev:css to watch while you edit
@@ -111,7 +116,7 @@ careers-website/
 ├── server.js         # Express server: API key auth, jobs fetch + cache, JSON-LD, sitemap, proxy routes
 ├── server.test.js
 ├── public/
-│   ├── index.html    # Listing shell — <!--SERVER_HEAD--> is the injection point
+│   ├── index.html    # Listing shell — <!--SERVER_HEAD--> and {{COMPANY_*}} are the injection points
 │   ├── job.html      # Job page shell — same
 │   ├── css/
 │   └── js/
