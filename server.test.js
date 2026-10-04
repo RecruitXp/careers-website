@@ -179,6 +179,102 @@ describe('proxyToBackend (via the real Express app) and /config.js', () => {
   });
 });
 
+// The listing used to wait for job-service on every request that found its 60 s cache entry stale,
+// which on an idle site is nearly every request a crawler makes. A stale entry is now served within
+// a deadline while the refresh runs; these tests drive that with a fake clock and a scripted upstream.
+describe('jobs cache: stale-while-revalidate behind a deadline', () => {
+  // Each upstream answer is a function so a test can make it slow, fail or 404. server.js is
+  // required lazily: at collection time the env the top-level before() sets is not there yet.
+  function setup(answers) {
+    const { createJobsCache } = require('./server.js');
+    let clock = 1_000_000;
+    const calls = [];
+    const cache = createJobsCache({
+      fetchJson: (url) => { calls.push(url); return answers.shift()(); },
+      ttlMs: 1000,
+      staleMaxMs: 10_000,
+      refreshDeadlineMs: 50,
+      now: () => clock,
+      log: { warn() {} },
+    });
+    return { cache, calls, tick: (ms) => { clock += ms; } };
+  }
+  const answer = (json, delayMs = 0, status = 200) => () =>
+    new Promise((resolve) => setTimeout(resolve, delayMs, { status, json }));
+  const failure = () => () => Promise.reject(new Error('upstream down'));
+
+  test('waits for the upstream when nothing is cached yet', async () => {
+    const { cache } = setup([answer(['first'], 100)]);
+    assert.deepEqual(await cache.get('/jobs'), ['first']);
+  });
+
+  test('serves a fresh entry without an upstream call', async () => {
+    const { cache, calls, tick } = setup([answer(['first'])]);
+    await cache.get('/jobs');
+    tick(500);
+    assert.deepEqual(await cache.get('/jobs'), ['first']);
+    assert.equal(calls.length, 1);
+  });
+
+  test('serves the stale copy at once when the refresh outruns the deadline, then lands the refresh', async () => {
+    const { cache, tick } = setup([answer(['first']), answer(['second'], 200)]);
+    await cache.get('/jobs');
+    tick(5000);
+
+    const started = Date.now();
+    assert.deepEqual(await cache.get('/jobs'), ['first']);
+    assert.ok(Date.now() - started < 150, 'the stale copy must not wait for the slow refresh');
+
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    // The background refresh has landed: the next read is the new list, with no further call.
+    assert.deepEqual(await cache.get('/jobs'), ['second']);
+  });
+
+  test('gives way to the fresh copy when the upstream answers within the deadline', async () => {
+    const { cache, tick } = setup([answer(['first']), answer(['second'], 5)]);
+    await cache.get('/jobs');
+    tick(5000);
+    assert.deepEqual(await cache.get('/jobs'), ['second']);
+  });
+
+  test('serves the stale copy when the refresh fails', async () => {
+    const { cache, tick } = setup([answer(['first']), failure()]);
+    await cache.get('/jobs');
+    tick(5000);
+    assert.deepEqual(await cache.get('/jobs'), ['first']);
+  });
+
+  test('a 404 within the deadline evicts the entry: an unpublished job stops being served at once', async () => {
+    const { cache, tick } = setup([answer({ Slug: 'x' }), answer(null, 0, 404), answer(null, 0, 404)]);
+    await cache.get('/jobs/x');
+    tick(5000);
+    assert.equal(await cache.get('/jobs/x'), null);
+    // Nothing cached any more, so the next read goes upstream again rather than reviving the old copy.
+    assert.equal(await cache.get('/jobs/x'), null);
+  });
+
+  test('refuses to serve a copy older than the ceiling and waits instead', async () => {
+    const { cache, tick } = setup([answer(['first']), answer(['second'], 100)]);
+    await cache.get('/jobs');
+    tick(20_000);
+    assert.deepEqual(await cache.get('/jobs'), ['second']);
+  });
+
+  test('rejects when the upstream fails and there is nothing worth serving', async () => {
+    const { cache } = setup([failure()]);
+    await assert.rejects(() => cache.get('/jobs'), /upstream down/);
+  });
+
+  test('concurrent stale requests share one upstream call', async () => {
+    const { cache, calls, tick } = setup([answer(['first']), answer(['second'], 200)]);
+    await cache.get('/jobs');
+    tick(5000);
+    const results = await Promise.all([cache.get('/jobs'), cache.get('/jobs'), cache.get('/jobs')]);
+    assert.deepEqual(results, [['first'], ['first'], ['first']]);
+    assert.equal(calls.length, 2);
+  });
+});
+
 // Publication is this site's job now, not job-service's: the URLs, the company identity and the
 // structured data all originate here (docs/implementation-plans/jobs-api-careers-site-publishing-plan.md).
 describe('published jobs, sitemap, view counting and server-rendered structured data', () => {

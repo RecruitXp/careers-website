@@ -91,13 +91,24 @@ function proxyToBackend(targetUrl) {
 // load, which is strictly more reliable for crawlers.
 //
 // TTL is 60s: a crawler burst over a job page and the sitemap collapses into one upstream call,
-// while a publish or unpublish becomes visible within a minute. The stale window is separate and
-// much longer — if job-service is briefly unreachable, serving a slightly old list beats blanking
-// the careers site and the sitemap, which is what Google would re-crawl.
-const JOBS_TTL_MS         = 60 * 1000;
-const JOBS_STALE_GRACE_MS = 10 * 60 * 1000;
-
-const responseCache = new Map(); // url -> { value, fetchedAt }
+// while a publish or unpublish becomes visible within a minute.
+//
+// A stale entry is never a reason to make the visitor wait for job-service. The refresh starts at
+// once, and the response waits for it only up to the deadline below, then goes out with the stale
+// copy while the refresh finishes in the background. This site is idle most of the time, so nearly
+// every request used to land on a cold entry and pay the whole upstream round trip (a crawler
+// measured 3.5 s); now only the first request after start can, and startup prefetches the listing.
+// A timer would keep the entry warm too, but a permanent background process for a site that
+// receives a few requests a day is the wrong trade.
+//
+// The deadline sits under Google's 0.8 s "good" first-byte threshold with room for the network.
+// The ceiling bounds how old a served copy may be, so a job unpublished long ago cannot resurface
+// after a quiet spell: beyond it the entry counts as absent and the request waits. It is also how
+// long a copy may be served while job-service is unreachable - old jobs beat blanking the careers
+// site and the sitemap, which is what Google would re-crawl.
+const JOBS_TTL_MS              = 60 * 1000;
+const JOBS_REFRESH_DEADLINE_MS = 600;
+const JOBS_STALE_MAX_MS        = 24 * 60 * 60 * 1000;
 
 function fetchFromJobsApi(url) {
   return requestJson(url, {
@@ -123,34 +134,69 @@ function reportView(jobId) {
   req.end();
 }
 
-// Returns the cached value while fresh, refetches when stale, and falls back to a stale copy only
-// when the refetch *failed*. A 404 is an answer, not a failure — an unpublished job must stop
-// being served immediately, so it evicts the entry rather than reviving the stale one.
-async function getCached(url) {
-  const now = Date.now();
-  const hit = responseCache.get(url);
-  if (hit && now - hit.fetchedAt < JOBS_TTL_MS) return hit.value;
+// A 404 is an answer, not a failure: an unpublished job must stop being served immediately, so it
+// evicts the entry rather than reviving the stale one. Everything else that goes wrong upstream
+// serves the stale copy, and only rejects when there is nothing to serve.
+//
+// A factory rather than module state so the behaviour can be tested with a fake clock and a
+// scripted upstream; `fetchJson` resolves { status, json } like requestJson below.
+const STALE = Symbol('serve the stale copy');
 
-  try {
-    const { status, json } = await fetchFromJobsApi(url);
-    if (status === 404) {
-      responseCache.delete(url);
-      return null;
-    }
-    responseCache.set(url, { value: json, fetchedAt: now });
-    return json;
-  } catch (err) {
-    if (hit && now - hit.fetchedAt < JOBS_STALE_GRACE_MS) {
-      console.warn(`[jobs] refetch failed, serving cached copy: ${err.message}`);
-      return hit.value;
-    }
-    throw err;
+function createJobsCache({ fetchJson, ttlMs, staleMaxMs, refreshDeadlineMs, now = Date.now, log = console }) {
+  const entries  = new Map(); // url -> { value, fetchedAt }
+  const inflight = new Map(); // url -> Promise, so concurrent stale requests share one upstream call
+
+  function refresh(url) {
+    if (inflight.has(url)) return inflight.get(url);
+    const pending = fetchJson(url)
+      .then(({ status, json }) => {
+        if (status === 404) {
+          entries.delete(url);
+          return null;
+        }
+        entries.set(url, { value: json, fetchedAt: now() });
+        return json;
+      })
+      .finally(() => inflight.delete(url));
+    inflight.set(url, pending);
+    return pending;
   }
+
+  async function get(url) {
+    const hit = entries.get(url);
+    const age = hit ? now() - hit.fetchedAt : Infinity;
+    if (age < ttlMs) return hit.value;
+
+    const pending = refresh(url);
+    if (age >= staleMaxMs) return pending;
+
+    let timer;
+    const deadline = new Promise((resolve) => { timer = setTimeout(resolve, refreshDeadlineMs, STALE); });
+    const settled = pending.catch((err) => {
+      log.warn(`[jobs] refresh failed, serving cached copy: ${err.message}`);
+      return STALE;
+    });
+    try {
+      const result = await Promise.race([settled, deadline]);
+      return result === STALE ? hit.value : result;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  return { get };
 }
+
+const jobsCache = createJobsCache({
+  fetchJson:         fetchFromJobsApi,
+  ttlMs:             JOBS_TTL_MS,
+  staleMaxMs:        JOBS_STALE_MAX_MS,
+  refreshDeadlineMs: JOBS_REFRESH_DEADLINE_MS,
+});
 
 function getPublishedJobs() {
   if (!cfg.jobsApiUrl) return Promise.reject(new Error('JOBS_API_URL is not configured'));
-  return getCached(cfg.jobsApiUrl);
+  return jobsCache.get(cfg.jobsApiUrl);
 }
 
 // A guid resolves by id, anything else by slug. The platform job page redirects here with the
@@ -163,7 +209,7 @@ function getPublishedJob(idOrSlug) {
   const pathSuffix = GUID_RE.test(idOrSlug)
     ? `by-id/${encodeURIComponent(idOrSlug)}`
     : encodeURIComponent(idOrSlug);
-  return getCached(`${cfg.jobsApiUrl}/${pathSuffix}`);
+  return jobsCache.get(`${cfg.jobsApiUrl}/${pathSuffix}`);
 }
 
 // ── Structured data — this site's job, this site's URL, this site's company ── //
@@ -490,10 +536,14 @@ if (process.env.NODE_ENV !== 'test') {
     if (!cfg.jobsApiUrl)     console.warn('[careers-website] WARNING: JOBS_API_URL is not set — no jobs will be shown');
     if (!cfg.baseUrl)        console.warn('[careers-website] WARNING: BASE_URL is not set — no structured data or sitemap');
     if (!cfg.companyCountry) console.warn('[careers-website] WARNING: COMPANY_COUNTRY is not set — structured data will omit the job\'s country');
+    // One-off warm-up, so the first visitor after a deploy does not wait on job-service either.
+    if (cfg.jobsApiUrl) {
+      getPublishedJobs().catch((err) => console.warn('[jobs] warm-up fetch failed:', err.message));
+    }
   });
 }
 
-module.exports = { app, proxyToBackend, buildJobPostingLd, dominantLanguage, reportView, applyBranding };
+module.exports = { app, proxyToBackend, buildJobPostingLd, dominantLanguage, reportView, applyBranding, createJobsCache };
 
 // ── Helpers ───────────────────────────────────────────────────────────────── //
 // Resolves { status, json } for 2xx and 404 — a 404 from the jobs API means "not published", which
