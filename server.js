@@ -47,7 +47,21 @@ const cfg = {
   applicantsUrl:   process.env.APPLICANTS_URL   || '',
   cvParseUrl:      process.env.CV_PARSE_URL     || '',
   applicationsUrl: process.env.APPLICATIONS_URL || '',
+  // Keeps the whole site out of search engines: a demo or sample deployment has no business being
+  // indexed, and a sitemap or canonical on it would claim the opposite. Off by default, because a
+  // real careers site exists to be found.
+  noindex:         /^(1|true|yes)$/i.test(process.env.NOINDEX || ''),
 };
+
+// ── NOINDEX — a header on every response, static files and 404s included ─────────────────────── //
+// The meta tag in the pages is the visible half; this one also covers what has no <head>. Neither
+// goes with a robots.txt Disallow: a crawler that may not fetch a page never reads its noindex.
+if (cfg.noindex) {
+  app.use((_req, res, next) => {
+    res.setHeader('X-Robots-Tag', 'noindex');
+    next();
+  });
+}
 
 // ── Backend calls — see docs/implementation-plans/platform-job-pages-plan.md §7 ─────────────── //
 // careers-website is a public, unauthenticated site — candidates never log in. Every call to
@@ -305,6 +319,32 @@ function escapeAttr(value) {
   return String(value).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
 }
 
+// Canonical link plus Open Graph and X card tags for the head. `url` is always built from BASE_URL,
+// never from the request's Host header (see buildJobPostingLd), so with no BASE_URL the canonical
+// and og:url are left out rather than guessed; the title and description tags still go out. With
+// NOINDEX the canonical goes too: it asks for the page to be indexed, which is the opposite claim.
+// No image tag: the careers site has no brand image to point at, and an invented one is worse than
+// the preview card falling back to text.
+function socialTagsHtml({ title, description, url, type }) {
+  const tag = (attr, name, value) => `<meta ${attr}="${name}" content="${escapeAttr(value)}">`;
+  const lines = [];
+  if (cfg.noindex) lines.push('<meta name="robots" content="noindex">');
+  else if (url) lines.push(`<link rel="canonical" href="${escapeAttr(url)}">`);
+  lines.push(
+    tag('property', 'og:type', type),
+    tag('property', 'og:site_name', cfg.companyName),
+    tag('property', 'og:title', title),
+    tag('property', 'og:description', description),
+  );
+  if (url) lines.push(tag('property', 'og:url', url));
+  lines.push(
+    tag('name', 'twitter:card', 'summary'),
+    tag('name', 'twitter:title', title),
+    tag('name', 'twitter:description', description),
+  );
+  return lines.join('\n  ');
+}
+
 // JSON destined for a <script> element, not for an HTTP body: a `</script>` or `<!--` inside any
 // job field would otherwise end the element early and turn job text into markup.
 function jsonForScript(value) {
@@ -399,13 +439,16 @@ app.post('/api/proxy/applications', proxyToBackend(cfg.applicationsUrl));
 
 // ── /robots.txt ───────────────────────────────────────────────────────────── //
 app.get('/robots.txt', (_req, res) => {
-  const sitemap = cfg.baseUrl ? `\nSitemap: ${cfg.baseUrl}/sitemap.xml` : '';
+  // No sitemap line under NOINDEX, and no Disallow either: see the note on the header above.
+  const sitemap = cfg.baseUrl && !cfg.noindex ? `\nSitemap: ${cfg.baseUrl}/sitemap.xml` : '';
   res.setHeader('Content-Type', 'text/plain; charset=utf-8');
   res.send(`User-agent: *\nAllow: /${sitemap}`);
 });
 
 // ── /sitemap.xml — fetched on-demand from the jobs API ────────────────────── //
 app.get('/sitemap.xml', async (_req, res) => {
+  // A sitemap is a list of pages to index, so a noindex site has none.
+  if (cfg.noindex) return res.status(404).send('Not found');
   if (!cfg.baseUrl || !cfg.jobsApiUrl) {
     return res.status(503).send('BASE_URL and JOBS_API_URL are required');
   }
@@ -470,7 +513,16 @@ async function serveListing(_req, res) {
     // page that renders the company's branding with no jobs on it.
   }
 
-  const head = `<script>window.__JOBS__ = ${jsonForScript(jobs)};</script>`;
+  const { META_DESCRIPTION } = brandingValues();
+  const head = [
+    `<script>window.__JOBS__ = ${jsonForScript(jobs)};</script>`,
+    socialTagsHtml({
+      title: `Careers — ${cfg.companyName}`,
+      description: META_DESCRIPTION,
+      url: cfg.baseUrl ? `${cfg.baseUrl}/` : '',
+      type: 'website',
+    }),
+  ].join('\n  ');
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
   res.setHeader('Cache-Control', 'no-cache');
   res.send(renderPage('index.html', head, dominantLanguage(jobs)));
@@ -500,9 +552,17 @@ app.get('/jobs/:idOrSlug', async (req, res) => {
   // Render. Count the view first (fire-and-forget), then send.
   reportView(job.Id);
 
-  const parts = [`<script>window.__JOB__ = ${jsonForScript(job)};</script>`];
+  const parts = [
+    `<script>window.__JOB__ = ${jsonForScript(job)};</script>`,
+    socialTagsHtml({
+      title: `${job.Title} — ${cfg.companyName}`,
+      // The same sentence job.js writes into the meta description, so the two cannot disagree.
+      description: `${job.Title} at ${cfg.companyName}${job.Location ? ' · ' + job.Location : ''}`,
+      url: cfg.baseUrl ? jobUrl(job.Slug) : '',
+      type: 'website',
+    }),
+  ];
   if (cfg.baseUrl) {
-    parts.push(`<link rel="canonical" href="${jobUrl(job.Slug)}">`);
     parts.push(
       `<script type="application/ld+json">${jsonForScript(buildJobPostingLd(job))}</script>`,
     );
@@ -535,6 +595,7 @@ if (process.env.NODE_ENV !== 'test') {
     console.log(`[careers-website] Listening on port ${PORT}`);
     if (!cfg.jobsApiUrl)     console.warn('[careers-website] WARNING: JOBS_API_URL is not set — no jobs will be shown');
     if (!cfg.baseUrl)        console.warn('[careers-website] WARNING: BASE_URL is not set — no structured data or sitemap');
+    if (cfg.noindex)         console.warn('[careers-website] NOINDEX is set: pages carry noindex, and there is no sitemap or canonical');
     if (!cfg.companyCountry) console.warn('[careers-website] WARNING: COMPANY_COUNTRY is not set — structured data will omit the job\'s country');
     // One-off warm-up, so the first visitor after a deploy does not wait on job-service either.
     if (cfg.jobsApiUrl) {
@@ -543,7 +604,7 @@ if (process.env.NODE_ENV !== 'test') {
   });
 }
 
-module.exports = { app, proxyToBackend, buildJobPostingLd, dominantLanguage, reportView, applyBranding, createJobsCache };
+module.exports = { app, proxyToBackend, buildJobPostingLd, dominantLanguage, reportView, applyBranding, createJobsCache, socialTagsHtml };
 
 // ── Helpers ───────────────────────────────────────────────────────────────── //
 // Resolves { status, json } for 2xx and 404 — a 404 from the jobs API means "not published", which

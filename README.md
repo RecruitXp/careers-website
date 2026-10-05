@@ -71,6 +71,7 @@ All configuration is environment variables, read once at startup.
 | `COMPANY_NAME` | yes | Your company's name, shown on the page and in the structured data. |
 | `COMPANY_COUNTRY` | recommended | ISO-3166 country code (e.g. `PT`, `US`) for the job posting's address. Google for Jobs needs it for non-remote roles. |
 | `COMPANY_TAGLINE`, `COMPANY_DESCRIPTION`, `COMPANY_WEBSITE`, `COMPANY_EMAIL` | no | Branding text shown on the page. |
+| `NOINDEX` | no | Set to `true` to keep the whole site out of search engines, for a demo or sample deployment. Every response then carries `X-Robots-Tag: noindex`, the pages carry a `noindex` meta tag and no canonical, `/sitemap.xml` answers 404 and `robots.txt` names no sitemap. `robots.txt` still does not disallow crawling, on purpose: a crawler that may not fetch a page never reads its `noindex`. Off by default. |
 | `APPLICANTS_URL`, `CV_PARSE_URL`, `APPLICATIONS_URL` | no | RecruitXp's apply-flow endpoints, proxied through `/api/proxy/*` so your API key never reaches the browser. Leave unset to run in demo mode: the apply form simulates success without submitting anywhere. |
 
 The browser is never given your API key or any RecruitXp URL directly — `/config.js` hands out

@@ -179,6 +179,78 @@ describe('proxyToBackend (via the real Express app) and /config.js', () => {
   });
 });
 
+// cfg is read when server.js is first required, so the NOINDEX behaviour needs a fresh copy of the
+// module. The cache is cleared on both sides so neither this copy nor the one other blocks require
+// is affected by the other.
+describe('NOINDEX', () => {
+  let appServer;
+  let appPort;
+
+  before(async () => {
+    delete require.cache[require.resolve('./server.js')];
+    process.env.NOINDEX = 'true';
+    const { app } = require('./server.js');
+    appServer = app.listen(0);
+    await new Promise((resolve) => appServer.once('listening', resolve));
+    appPort = appServer.address().port;
+  });
+
+  after(async () => {
+    delete process.env.NOINDEX;
+    delete require.cache[require.resolve('./server.js')];
+    await new Promise((resolve) => appServer.close(resolve));
+  });
+
+  const get = (path) => fetch(`http://localhost:${appPort}${path}`);
+
+  test('every response carries X-Robots-Tag, the listing, a job, a static file and a 404 alike', async () => {
+    for (const path of ['/', '/jobs/senior-backend-engineer', '/css/styles.css', '/jobs/no-such-job', '/robots.txt']) {
+      const res = await get(path);
+      await res.text();
+      assert.equal(res.headers.get('x-robots-tag'), 'noindex', path);
+    }
+  });
+
+  test('the pages say noindex in the markup and drop the canonical', async () => {
+    for (const path of ['/', '/jobs/senior-backend-engineer']) {
+      const html = await (await get(path)).text();
+      assert.match(html, /<meta name="robots" content="noindex">/, path);
+      assert.equal(html.includes('rel="canonical"'), false, path);
+    }
+  });
+
+  test('there is no sitemap, and robots.txt neither names one nor disallows crawling', async () => {
+    assert.equal((await get('/sitemap.xml')).status, 404);
+
+    const robots = await (await get('/robots.txt')).text();
+    assert.equal(robots.includes('Sitemap'), false);
+    // A Disallow would stop a crawler reading the noindex it is meant to obey.
+    assert.equal(robots.includes('Disallow'), false);
+    assert.match(robots, /Allow: \//);
+  });
+
+  test('is off by default: no header, a canonical, and a sitemap', async () => {
+    // The shared instance the other blocks use was loaded with NOINDEX unset.
+    delete process.env.NOINDEX;
+    delete require.cache[require.resolve('./server.js')];
+    const { app } = require('./server.js');
+    const server = app.listen(0);
+    await new Promise((resolve) => server.once('listening', resolve));
+    const port = server.address().port;
+    try {
+      const res = await fetch(`http://localhost:${port}/`);
+      const html = await res.text();
+      assert.equal(res.headers.get('x-robots-tag'), null);
+      assert.match(html, /rel="canonical"/);
+      assert.equal(html.includes('name="robots"'), false);
+      assert.equal((await fetch(`http://localhost:${port}/sitemap.xml`)).status, 200);
+    } finally {
+      await new Promise((resolve) => server.close(resolve));
+      process.env.NOINDEX = 'true';
+    }
+  });
+});
+
 // The listing used to wait for job-service on every request that found its 60 s cache entry stale,
 // which on an idle site is nearly every request a crawler makes. A stale entry is now served within
 // a deadline while the refresh runs; these tests drive that with a fake clock and a scripted upstream.
@@ -457,6 +529,40 @@ describe('published jobs, sitemap, view counting and server-rendered structured 
     assert.match(html, /href="mailto:jobs@example\.test"[^>]*>jobs@example\.test</);
     assert.match(html, /<meta name="description" content="Open positions and career opportunities at Example Client Ltd\.">/);
     assert.equal(html.includes('{{'), false);
+  });
+
+  test('the listing declares its canonical URL and the Open Graph and X card tags', async () => {
+    const res = await fetch(`http://localhost:${appPort}/`);
+    const html = await res.text();
+
+    // Built from BASE_URL, so it matches the sitemap's <loc> for the listing.
+    assert.match(html, /<link rel="canonical" href="https:\/\/careers\.example\.test\/">/);
+    assert.match(html, /<meta property="og:title" content="Careers — Example Client Ltd">/);
+    assert.match(html, /<meta property="og:url" content="https:\/\/careers\.example\.test\/">/);
+    assert.match(html, /<meta property="og:type" content="website">/);
+    assert.match(html, /<meta property="og:site_name" content="Example Client Ltd">/);
+    assert.match(html, /<meta name="twitter:card" content="summary">/);
+  });
+
+  test('the job page carries social tags for that job, with exactly one canonical', async () => {
+    const res = await fetch(`http://localhost:${appPort}/jobs/senior-backend-engineer`);
+    const html = await res.text();
+
+    assert.match(html, /<meta property="og:title" content="Senior Backend Engineer — Example Client Ltd">/);
+    assert.match(html, /<meta property="og:description" content="Senior Backend Engineer at Example Client Ltd · Lisbon">/);
+    assert.match(html, /<meta property="og:url" content="https:\/\/careers\.example\.test\/jobs\/senior-backend-engineer">/);
+    assert.equal((html.match(/rel="canonical"/g) || []).length, 1);
+  });
+
+  test('social tags drop the URLs, never guess them, and escape what they print', () => {
+    const { socialTagsHtml } = require('./server.js');
+
+    const html = socialTagsHtml({ title: 'A "B" <C>', description: 'x & y', url: '', type: 'website' });
+
+    assert.equal(html.includes('canonical'), false);
+    assert.equal(html.includes('og:url'), false);
+    assert.match(html, /content="A &quot;B&quot; &lt;C>"/);
+    assert.match(html, /content="x &amp; y"/);
   });
 
   test('the job page renders the same branding', async () => {
