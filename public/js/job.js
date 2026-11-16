@@ -411,8 +411,17 @@
   });
 
   // ── 10. Event listeners ──────────────────────────────────────────────────── //
-  document.getElementById('apply-modal').addEventListener('click', function(e) {
-    if (e.target === this) closeApply();
+  var applyModal = document.getElementById('apply-modal');
+  var pointerStartedOutside = false;
+  applyModal.addEventListener('pointerdown', function(e) {
+    pointerStartedOutside = e.button === 0 && e.target === this;
+  });
+  applyModal.addEventListener('pointerup', function(e) {
+    if (pointerStartedOutside && e.button === 0 && e.target === this) closeApply();
+    pointerStartedOutside = false;
+  });
+  applyModal.addEventListener('pointercancel', function() {
+    pointerStartedOutside = false;
   });
   document.addEventListener('keydown', function(e) {
     if (e.key === 'Escape') closeApply();
